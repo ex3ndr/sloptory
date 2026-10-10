@@ -1,0 +1,33 @@
+{
+  "name": "sloptory",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A browser tech-factory simulation where the only control is text.",
+  "type": "module",
+  "engines": {
+    "node": ">=23.6"
+  },
+  "scripts": {
+    "build": "node scripts/build.ts",
+    "start": "node src/server/main.ts",
+    "dev": "node scripts/build.ts && node src/server/main.ts",
+    "test": "node --test \"test/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit",
+    "smoke": "node scripts/smoke.ts",
+    "check": "tsc --noEmit && node --test \"test/**/*.test.ts\" && node scripts/build.ts"
+  },
+  "dependencies": {
+    "ws": "^8.21.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.4",
+    "@types/ws": "^8.18.1",
+    "esbuild": "^0.28.2",
+    "typescript": "~5.9.3"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
+}

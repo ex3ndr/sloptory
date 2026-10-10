@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sloptory — factory floor</title>
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <canvas id="floor" aria-label="Factory floor, top-down view"></canvas>
+
+    <header id="hud" class="panel reveal">
+      <div class="brand">
+        <span class="hazard" aria-hidden="true"></span>
+        <span class="wordmark">SLOPTORY</span>
+        <span class="game-name" id="game-name">—</span>
+      </div>
+      <div class="gauge"><label>Cash</label><b id="cash">$0</b><small id="rate">+$0/min</small></div>
+      <div class="gauge"><label>Clock</label><b id="clock">T+0:00:00</b><small id="speed">1×</small></div>
+      <div class="gauge power">
+        <label>Power</label><b id="power">0 / 400 kW</b>
+        <span class="meter"><span id="power-bar"></span></span>
+      </div>
+      <div class="gauge"><label>Shipped</label><b id="shipped">0</b><small id="shipped-rate">0/min</small></div>
+      <div class="gauge"><label>Stock</label><b id="stock-total">0</b><small id="stock-cap">/ 500</small></div>
+      <div class="gauge"><label>Floor</label><b id="floor-running">0 / 0</b><small id="floor-belts">0 belts</small></div>
+      <div class="gauge view"><label>View</label><b id="view">0,0</b><small id="zoom">1.00×</small></div>
+      <div class="link" id="link"><i></i><span>connecting</span></div>
+    </header>
+
+    <aside id="side" class="reveal">
+      <section class="panel card">
+        <h2>Orders</h2>
+        <ol id="orders"><li class="empty">No open orders</li></ol>
+      </section>
+      <section class="panel card">
+        <h2>Lines</h2>
+        <ul id="lines"><li class="empty">No lines yet</li></ul>
+      </section>
+      <section class="panel card">
+        <h2>Stock <span class="tag" id="autobuy">autobuy off</span></h2>
+        <ul id="stock" class="stock"><li class="empty">Empty</li></ul>
+      </section>
+    </aside>
+
+    <section id="console" class="panel reveal" aria-label="Command console">
+      <div class="console-head">
+        <span class="title">Floor manager</span>
+        <span class="agent" id="agent">—</span>
+        <span class="busy" id="busy" hidden>working<span class="dots"></span></span>
+      </div>
+      <div id="log" role="log" aria-live="polite"></div>
+      <form id="prompt" autocomplete="off">
+        <span class="caret">›</span>
+        <input id="cmd" name="cmd" spellcheck="false" autocomplete="off" placeholder="Tell the factory what to do — try “build a mug line”" />
+      </form>
+    </section>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
