@@ -18,6 +18,8 @@ export type MachineStatus = 'idle' | 'working' | 'starved' | 'blocked' | 'ready'
 export interface Machine {
   id: string;
   type: string;
+  /** Player- or agent-given name; null shows the default ("Kiln 1"). */
+  name: string | null;
   /** Top-left tile of the footprint. */
   x: number;
   y: number;
@@ -59,10 +61,12 @@ export interface Order {
   expiresAt: number;
 }
 
+/** A named group of machines (production line or zone). */
 export interface Line {
   id: string;
   name: string;
-  blueprint: string;
+  /** Blueprint it was built from, if any. */
+  blueprint: string | null;
 }
 
 export interface HistoryPoint {

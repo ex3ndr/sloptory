@@ -19,12 +19,27 @@ export type CameraAction = 'pan' | 'center' | 'zoom' | 'focus' | 'overview';
 
 export type Command =
   | { op: 'help'; topic?: string }
-  | { op: 'place'; machine: string; x?: number; y?: number; recipe?: string; count?: number }
+  | { op: 'place'; machine: string; x?: number; y?: number; recipe?: string; count?: number; name?: string; as?: string }
   | { op: 'remove'; target: string }
   | { op: 'move'; target: string; x: number; y: number }
   | { op: 'connect'; from: string; to: string }
   | { op: 'disconnect'; from: string; to?: string }
   | { op: 'set_recipe'; target: string; recipe: string }
+  | { op: 'rename'; target: string; name: string }
+  /** Groups machines under a line/zone name (created if new); machines leave their old line. */
+  | { op: 'name_line'; name: string; machines: string[] }
+  /**
+   * Applies edit commands in order. A place op with `as: "press"` can be referenced later in the
+   * same batch as "@press". dryRun applies to a copy and reports; atomic rolls back on any failure.
+   */
+  | { op: 'batch'; ops: Command[]; dryRun?: boolean; atomic?: boolean }
+  | { op: 'diagnose'; target?: string }
+  | { op: 'find_space'; w: number; h: number; x?: number; y?: number; margin?: number; count?: number }
+  | { op: 'map'; x: number; y: number; w: number; h: number }
+  /** Structured state of a line, machine, region, or the whole factory. */
+  | { op: 'inspect'; target?: string; x?: number; y?: number; w?: number; h?: number }
+  | { op: 'catalog'; filter?: string }
+  | { op: 'item'; item: string; upstream?: boolean }
   | { op: 'buy'; item: string; qty: number }
   | { op: 'sell'; item: string; qty: number | 'all' }
   | { op: 'blueprint'; name: string; x?: number; y?: number }
@@ -51,7 +66,12 @@ export type Command =
 export interface CommandResult {
   ok: boolean;
   message: string;
+  /** Structured detail for agents (tool results); the message is for people. */
+  data?: unknown;
 }
+
+/** Commands allowed inside a batch: layout and stock edits, no game management. */
+export const BATCH_OPS = ['place', 'remove', 'move', 'connect', 'disconnect', 'set_recipe', 'rename', 'name_line', 'buy', 'sell', 'autobuy'] as const;
 
 export interface Camera {
   /** Center of the view, in tiles. */

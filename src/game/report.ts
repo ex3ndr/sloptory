@@ -3,7 +3,6 @@
 import { BLUEPRINTS, blueprintBounds, blueprintCost } from '../engine/blueprints.ts';
 import { ITEMS, MACHINES, MACHINE_LIST, RECIPES, type MachineDef } from '../engine/catalog.ts';
 import { money } from '../engine/economy.ts';
-import { beltLength } from '../engine/routing.ts';
 import { total, type GameState, type Machine } from '../engine/state.ts';
 import { defOf, displayName, recipeOf, stockCapacity } from '../engine/world.ts';
 
@@ -154,24 +153,48 @@ export const HELP = `You run the factory by typing. Examples:
   set kiln 1 to glaze firing  · recipes for cnc · info kiln 1
   buy 200 clay                · sell 10 mugs · autobuy on
   remove kiln 2               · move kiln 1 to 30,12
-  left / scroll up 5 / zoom in / zoom 2 / go to the smt line / overview
+  rename kiln 1 to Bisque kiln · diagnose · diagnose the mug line
+  go to the smt line / go to kiln 1 / overview (text camera shortcuts)
   status · stock · orders · machines · lines · power · catalog
   pause · resume · speed 4    · save as day1 · load day1 · saves · new game
+Navigate with the mouse and keyboard: drag or two-finger scroll to pan, wheel or pinch to zoom,
+WASD/arrows to pan and +/- to zoom, F or Home to fit the factory. Esc or a click on the floor leaves
+the text box; Enter or / goes back to typing.
 Coordinates are tiles (x right, y down) for a machine's top-left corner.
 Materials flow from a receiving dock over conveyors; the shipping dock sells boxed products.`;
 
+function occupiedText(state: GameState): string {
+  if (state.machines.length === 0) return 'none, the floor is empty';
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  for (const m of state.machines) {
+    const d = defOf(m);
+    x0 = Math.min(x0, m.x);
+    y0 = Math.min(y0, m.y);
+    x1 = Math.max(x1, m.x + d.w);
+    y1 = Math.max(y1, m.y + d.h);
+  }
+  return `x ${x0}..${x1 - 1}, y ${y0}..${y1 - 1}`;
+}
+
 /** Compact world description for the LLM, refreshed on every request. */
 export function agentSummary(state: GameState): string {
+  const lineName = (id: string | null) => (id ? state.lines.find((l) => l.id === id)?.name : undefined);
   const machines = state.machines.map((m) => {
-    const r = m.recipe ? ` ${m.recipe}` : '';
+    const d = defOf(m);
+    const name = m.name ? ` "${m.name}"` : '';
+    const status = d.role === 'process' ? ` ${m.status} ${m.recipe ?? 'NO-RECIPE'}` : '';
     const buf = Object.keys(m.output).length ? ` out{${bag(m.output)}}` : '';
-    return `${m.id}(${m.type}) @${m.x},${m.y} ${defOf(m).w}x${defOf(m).h} ${m.status}${r}${buf}`;
+    const line = lineName(m.line) ? ` [${lineName(m.line)}]` : '';
+    return `${m.id}${name} ${m.type} @${m.x},${m.y} ${d.w}x${d.h}${status}${buf}${line}`;
   });
-  const belts = state.belts.map((b) => `${b.from}->${b.to}${b.path.length ? ` ${beltLength(b)}t` : ' BROKEN'}`);
+  const belts = state.belts.map((b) => `${b.from}->${b.to}${b.path.length ? '' : ' NO-ROUTE'}`);
   return [
     statusReport(state),
-    `Floor ${state.width}x${state.height} tiles.`,
-    `Machines:\n${machines.join('\n') || '(none)'}`,
+    `Floor ${state.width}x${state.height} tiles. Occupied area: ${occupiedText(state)}.`,
+    `Machines (id "name" type @x,y wxh status recipe [line]):\n${machines.join('\n') || '(none)'}`,
     `Conveyors: ${belts.join(', ') || '(none)'}`,
   ].join('\n');
 }

@@ -6,20 +6,24 @@ import { buildBlueprint } from '../engine/blueprints.ts';
 import { CATEGORY_COLORS, ITEM_LIST, MACHINE_LIST, RECIPE_LIST, isBuyable } from '../engine/catalog.ts';
 import { buy, money, sellStock, type SimEvent } from '../engine/economy.ts';
 import { connect, disconnect, moveMachine, placeMachine, removeMachine, setRecipe } from '../engine/ops.ts';
+import { catalogData, diagnose, findFreeAreas, itemData, renderMap, selectMachines, stateData, summarizeIssues } from '../engine/inspect.ts';
 import {
+  norm,
   resolveBlueprint,
   resolveFocus,
   resolveItem,
+  resolveLine,
   resolveMachine,
   resolveMachineType,
   resolveRecipe,
 } from '../engine/resolve.ts';
 import { deserialize, sanitizeSaveName, serialize } from '../engine/save.ts';
 import { step } from '../engine/sim.ts';
-import { count, createState, type GameState } from '../engine/state.ts';
-import { contentBounds, findFreeSpot, stockCapacity, type Rect } from '../engine/world.ts';
-import { TILE_PX, VIEW_INSETS, type CatalogView, type LogEntry, type LogKind, type Snapshot } from '../shared/protocol.ts';
-import type { Camera, ClientView, Command, CommandResult } from './api.ts';
+import { count, createState, type GameState, type Machine } from '../engine/state.ts';
+import { contentBounds, displayName, findFreeSpot, stockCapacity } from '../engine/world.ts';
+import { MAX_ZOOM, MIN_ZOOM, clamp, fitCamera } from '../shared/camera.ts';
+import type { CatalogView, LogEntry, LogKind, Snapshot } from '../shared/protocol.ts';
+import { BATCH_OPS, type Camera, type ClientView, type Command, type CommandResult } from './api.ts';
 import {
   HELP,
   blueprintsReport,
@@ -35,8 +39,6 @@ import {
   stockReport,
 } from './report.ts';
 
-export const MIN_ZOOM = 0.3;
-export const MAX_ZOOM = 3;
 const ITEM_INDEX: Record<string, number> = Object.fromEntries(ITEM_LIST.map((it, i) => [it.id, i]));
 const SPEEDS = [0, 1, 2, 4, 8];
 
@@ -56,20 +58,23 @@ export function defaultCamera(state: GameState, viewport = { w: 1280, h: 800 }):
   return fitCamera(r, viewport);
 }
 
-/** Camera that fits a rect into the part of the screen not covered by the HUD panels. */
-export function fitCamera(r: Rect, viewport: { w: number; h: number }, pad = 3): Camera {
-  const i = VIEW_INSETS;
-  const w = Math.max(320, viewport.w - i.left - i.right);
-  const h = Math.max(200, viewport.h - i.top - i.bottom);
-  const zoom = clamp(Math.min(w / ((r.w + pad * 2) * TILE_PX), h / ((r.h + pad * 2) * TILE_PX)), MIN_ZOOM, 2.2);
-  // Shift so the rect sits in the middle of the free area rather than the screen.
-  const dx = (i.right - i.left) / 2 / (TILE_PX * zoom);
-  const dy = (i.bottom - i.top) / 2 / (TILE_PX * zoom);
-  return { x: r.x + r.w / 2 + dx, y: r.y + r.h / 2 + dy, zoom };
-}
 
-function clamp(v: number, lo: number, hi: number): number {
-  return Math.min(hi, Math.max(lo, v));
+/** Replaces "@ref" machine references from earlier place ops in the same batch. Returns an error string if one is unknown. */
+function substituteRefs(op: Command, refs: Map<string, string>): Command | string {
+  const out = { ...op } as Record<string, unknown>;
+  const sub = (v: unknown): unknown => {
+    if (typeof v !== 'string' || !v.startsWith('@')) return v;
+    const id = refs.get(v.slice(1));
+    if (!id) throw new Error(`Unknown reference "${v}": no earlier successful place op in this batch had as: "${v.slice(1)}".`);
+    return id;
+  };
+  try {
+    for (const key of ['target', 'from', 'to']) if (key in out) out[key] = sub(out[key]);
+    if (Array.isArray(out.machines)) out.machines = out.machines.map(sub);
+  } catch (e) {
+    return (e as Error).message;
+  }
+  return out as Command;
 }
 
 export class Game {
@@ -77,6 +82,8 @@ export class Game {
   readonly savesDir: string;
   readonly log: LogEntry[] = [];
   private logId = 0;
+  /** >0 while a dry run executes on a copy: suppress log output. */
+  private quiet = 0;
   private resumeSpeed = 1;
   private onReset?: () => void;
   private onLog?: (entry: LogEntry) => void;
@@ -94,6 +101,7 @@ export class Game {
   }
 
   addLog(kind: LogKind, text: string, via?: string): LogEntry {
+    if (this.quiet > 0) return { id: 0, kind, text, time: this.state.time, via };
     const entry: LogEntry = { id: ++this.logId, kind, text, time: this.state.time, via };
     this.log.push(entry);
     if (this.log.length > 300) this.log.splice(0, this.log.length - 300);
@@ -132,7 +140,14 @@ export class Game {
           recipe = r.id;
         }
         const n = Math.max(1, Math.min(10, Math.floor(cmd.count ?? 1)));
+        const name = cmd.name?.trim().slice(0, 40) || null;
+        if (name) {
+          if (n > 1) return err('Give each machine its own name; place them one at a time.');
+          const clash = this.nameClash(name);
+          if (clash) return err(clash);
+        }
         const messages: string[] = [];
+        const ids: string[] = [];
         for (let i = 0; i < n; i++) {
           let x = cmd.x;
           let y = cmd.y;
@@ -143,11 +158,12 @@ export class Game {
             x = spot.x;
             y = spot.y;
           }
-          const r = placeMachine(s, def.id, x, y, { recipe });
-          if (!r.ok) return { ok: messages.length > 0, message: [...messages, r.message].join('\n') };
+          const r = placeMachine(s, def.id, x, y, { recipe, name });
+          if (!r.ok) return { ok: messages.length > 0, message: [...messages, r.message].join('\n'), data: { ids } };
           messages.push(r.message);
+          ids.push(r.machine!.id);
         }
-        return ok(messages.join('\n'));
+        return { ok: true, message: messages.join('\n'), data: ids.length === 1 ? { id: ids[0] } : { ids } };
       }
       case 'remove': {
         const ref = resolveMachine(s, cmd.target);
@@ -185,6 +201,76 @@ export class Game {
         const r = resolveRecipe(cmd.recipe, def);
         if (!r) return err(`${def.name} can't make "${cmd.recipe}". Options: ${def.recipes.join(', ') || 'none'}.`);
         return setRecipe(s, ref.machine.id, r.id);
+      }
+      case 'rename': {
+        const ref = resolveMachine(s, cmd.target);
+        if ('error' in ref) return err(ref.error);
+        const name = cmd.name.trim().slice(0, 40);
+        const old = displayName(ref.machine);
+        if (!name) {
+          ref.machine.name = null;
+          return ok(`${old} [${ref.machine.id}] is back to its default name.`);
+        }
+        const clash = this.nameClash(name, ref.machine.id);
+        if (clash) return err(clash);
+        ref.machine.name = name;
+        return ok(`Renamed ${old} [${ref.machine.id}] to "${name}".`);
+      }
+      case 'name_line':
+        return this.nameLine(cmd.name, cmd.machines);
+      case 'batch':
+        return this.batch(cmd, view);
+      case 'diagnose': {
+        const scope = cmd.target ? this.scope(cmd.target) : undefined;
+        if (scope && 'error' in scope) return err(scope.error);
+        const issues = diagnose(s, scope?.ids);
+        const label = scope ? ` (${scope.label})` : '';
+        return {
+          ok: true,
+          message: summarizeIssues(issues).replace(/^([^:\n]+):?/, (head) => head + label),
+          data: { scope: scope?.label ?? 'whole factory', errors: issues.filter((i) => i.severity === 'error').length, issues },
+        };
+      }
+      case 'find_space': {
+        const w = Math.floor(cmd.w);
+        const h = Math.floor(cmd.h);
+        const margin = Math.max(0, Math.floor(cmd.margin ?? 1));
+        if (!(w > 0 && h > 0)) return err('find_space needs a positive width and height.');
+        const near = cmd.x !== undefined && cmd.y !== undefined ? { x: cmd.x, y: cmd.y } : undefined;
+        const areas = findFreeAreas(s, w, h, near, margin, Math.max(1, Math.min(10, cmd.count ?? 3)));
+        if (areas.length === 0) {
+          return { ok: false, message: `No free ${w}×${h} area with a ${margin}-tile margin on the ${s.width}×${s.height} floor.`, data: { areas } };
+        }
+        return { ok: true, message: `Free ${w}×${h} areas (top-left corners): ${areas.map((a) => `${a.x},${a.y}`).join('; ')}.`, data: { areas } };
+      }
+      case 'map': {
+        const r = renderMap(s, cmd.x, cmd.y, cmd.w, cmd.h);
+        const legend = Object.entries(r.legend).map(([k, v]) => `${k} = ${v}`);
+        return { ok: true, message: [r.map, ...legend].join('\n'), data: r };
+      }
+      case 'inspect': {
+        let machines = s.machines;
+        let label = 'whole factory';
+        if (cmd.target) {
+          const scope = this.scope(cmd.target);
+          if ('error' in scope) return err(scope.error);
+          machines = selectMachines(s, scope.ids);
+          label = scope.label;
+        } else if (cmd.x !== undefined && cmd.y !== undefined) {
+          const region = { x: cmd.x, y: cmd.y, w: cmd.w ?? 30, h: cmd.h ?? 20 };
+          machines = selectMachines(s, undefined, region);
+          label = `region ${region.x},${region.y} ${region.w}×${region.h}`;
+        }
+        if (machines.length === 1) return { ok: true, message: machineReport(s, machines[0]), data: stateData(s, machines) };
+        return { ok: true, message: `${label}: ${machines.length} machines.`, data: stateData(s, machines) };
+      }
+      case 'catalog':
+        return { ok: true, message: catalogReport(), data: catalogData(cmd.filter) };
+      case 'item': {
+        const it = resolveItem(cmd.item);
+        if (!it) return err(`Unknown item "${cmd.item}".`);
+        const data = itemData(it.id, cmd.upstream);
+        return { ok: true, message: this.query('recipes', it.id).message, data };
       }
       case 'buy': {
         const it = resolveItem(cmd.item, (i) => isBuyable(i.id));
@@ -263,6 +349,98 @@ export class Game {
       case 'list_saves':
         return ok(this.savesText());
     }
+  }
+
+  /** Error text if `name` is already used by another machine (as a name or an id). */
+  private nameClash(name: string, except?: string): string | null {
+    const n = norm(name);
+    const other = this.state.machines.find((m) => m.id !== except && (norm(m.id) === n || norm(displayName(m)) === n));
+    return other ? `The name "${name}" is already used by ${other.id}.` : null;
+  }
+
+  /** Machines in a named line, or a single machine. */
+  private scope(target: string): { ids: Set<string>; label: string } | { error: string } {
+    const line = resolveLine(this.state, target);
+    if (line) return { ids: new Set(this.state.machines.filter((m) => m.line === line.id).map((m) => m.id)), label: line.name };
+    const ref = resolveMachine(this.state, target);
+    if ('machine' in ref) return { ids: new Set([ref.machine.id]), label: ref.machine.id };
+    return { error: `No line or machine called "${target}". Lines: ${this.state.lines.map((l) => l.name).join(', ') || 'none'}.` };
+  }
+
+  private nameLine(rawName: string, targets: string[]): CommandResult {
+    const s = this.state;
+    const name = (rawName ?? '').trim().slice(0, 40);
+    if (!name) return err('A line needs a name.');
+    if (!Array.isArray(targets) || targets.length === 0) return err('List the machines that belong to the line.');
+    const machines: Machine[] = [];
+    const missing: string[] = [];
+    for (const t of targets) {
+      const ref = resolveMachine(s, String(t));
+      if ('error' in ref) missing.push(`${t} (${ref.error})`);
+      else if (!machines.includes(ref.machine)) machines.push(ref.machine);
+    }
+    if (missing.length > 0) return err(`Could not find: ${missing.join('; ')}`);
+    let line = s.lines.find((l) => norm(l.name) === norm(name));
+    if (!line) {
+      s.counters.line++;
+      line = { id: `line-${s.counters.line}`, name, blueprint: null };
+      s.lines.push(line);
+    }
+    const lineId = line.id;
+    for (const m of machines) m.line = lineId;
+    s.lines = s.lines.filter((l) => s.machines.some((m) => m.line === l.id));
+    const members = s.machines.filter((m) => m.line === lineId).map((m) => m.id);
+    return { ok: true, message: `Line "${line.name}" has ${members.length} machines.`, data: { line: line.name, machines: members } };
+  }
+
+  private batch(cmd: Extract<Command, { op: 'batch' }>, view: ClientView): CommandResult {
+    const ops = Array.isArray(cmd.ops) ? cmd.ops : [];
+    if (ops.length === 0) return err('A batch needs at least one op.');
+    if (ops.length > 200) return err('A batch can hold at most 200 ops.');
+    const original = this.state;
+    const dry = !!cmd.dryRun;
+    const backup = dry || cmd.atomic ? structuredClone(original) : null;
+    if (dry) {
+      this.state = backup!;
+      this.quiet++;
+    }
+    const refs = new Map<string, string>();
+    const results: { i: number; op: string; ok: boolean; message: string; id?: string }[] = [];
+    try {
+      ops.forEach((raw, i) => {
+        const opName = String((raw as { op?: unknown })?.op ?? '');
+        if (!(BATCH_OPS as readonly string[]).includes(opName)) {
+          results.push({ i, op: opName, ok: false, message: `"${opName}" is not allowed in a batch (allowed: ${BATCH_OPS.join(', ')}).` });
+          return;
+        }
+        const resolved = substituteRefs(raw, refs);
+        if (typeof resolved === 'string') {
+          results.push({ i, op: opName, ok: false, message: resolved });
+          return;
+        }
+        const r = this.exec(resolved, view);
+        const id = (r.data as { id?: string } | undefined)?.id;
+        if (r.ok && id && resolved.op === 'place' && resolved.as) refs.set(resolved.as.replace(/^@/, ''), id);
+        results.push({ i, op: opName, ok: r.ok, message: r.message, ...(id ? { id } : {}) });
+      });
+    } finally {
+      if (dry) {
+        this.state = original;
+        this.quiet--;
+      }
+    }
+    const failed = results.filter((r) => !r.ok);
+    const rolledBack = !dry && !!cmd.atomic && failed.length > 0;
+    if (rolledBack) this.state = backup!;
+    const head =
+      `Batch${dry ? ' (dry run, nothing changed)' : ''}: ${results.length - failed.length}/${results.length} ops succeeded` +
+      (rolledBack ? '; atomic batch rolled back, nothing changed.' : '.');
+    const lines = failed.map((r) => `#${r.i} ${r.op}: ${r.message}`);
+    return {
+      ok: failed.length === 0,
+      message: [head, ...lines].join('\n'),
+      data: { dry_run: dry, applied: !dry && !rolledBack, succeeded: results.length - failed.length, failed: failed.length, results },
+    };
   }
 
   private query(what: string, target?: string): CommandResult {
@@ -421,6 +599,7 @@ export class Game {
         const r = m.recipe ? RECIPE_LIST.find((x) => x.id === m.recipe) : undefined;
         return {
           id: m.id,
+          name: m.name,
           type: m.type,
           x: m.x,
           y: m.y,

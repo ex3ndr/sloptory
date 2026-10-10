@@ -31,7 +31,7 @@ export function placeMachine(
   type: string,
   x: number,
   y: number,
-  opts: { recipe?: string | null; line?: string | null; free?: boolean } = {},
+  opts: { recipe?: string | null; line?: string | null; name?: string | null; free?: boolean } = {},
 ): OpResult {
   const def = MACHINES[type];
   if (!def) return fail(`Unknown machine type "${type}".`);
@@ -55,6 +55,7 @@ export function placeMachine(
   const m: Machine = {
     id: nextMachineId(state, def),
     type,
+    name: opts.name ?? null,
     x,
     y,
     recipe,

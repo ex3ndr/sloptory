@@ -24,6 +24,8 @@ export interface Frame {
   catalog: CatalogView;
   /** Seconds, for animation. */
   now: number;
+  /** Machine under the mouse pointer, highlighted. */
+  hoverId?: string | null;
 }
 
 interface Poly {
@@ -404,6 +406,12 @@ export class Renderer {
     roundRect(ctx, x, y, w, h, rad);
     ctx.stroke();
     ctx.setLineDash([]);
+    if (f.hoverId === m.id) {
+      ctx.lineWidth = Math.max(1.5, s * 0.09);
+      ctx.strokeStyle = 'rgba(242,194,48,0.95)';
+      roundRect(ctx, x - s * 0.08, y - s * 0.08, w + s * 0.16, h + s * 0.16, rad + s * 0.08);
+      ctx.stroke();
+    }
 
     // Status lamp.
     const lr = Math.max(2, s * 0.12);
@@ -431,11 +439,12 @@ export class Renderer {
     if (s < 8) return;
     // Labels.
     const n = m.id.slice(m.id.lastIndexOf('-') + 1);
-    let label = `${d.name.toUpperCase()} ${n}`;
+    let label = m.name ? m.name.toUpperCase() : `${d.name.toUpperCase()} ${n}`;
     let fs = Math.max(8, Math.min(16, band * 0.58));
     ctx.font = `700 ${fs}px ${DISPLAY_FONT}`;
     const room = w - lr * 2 - s * 0.45;
-    if (ctx.measureText(label).width > room) label = `${d.short.toUpperCase()} ${n}`;
+    if (ctx.measureText(label).width > room && !m.name) label = `${d.short.toUpperCase()} ${n}`;
+    if (ctx.measureText(label).width > room && m.name) label = ellipsize(ctx, label, room);
     while (ctx.measureText(label).width > room && fs > 7) {
       fs -= 1;
       ctx.font = `700 ${fs}px ${DISPLAY_FONT}`;

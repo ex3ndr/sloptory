@@ -22,6 +22,7 @@ export function deserialize(json: string): GameState {
   // Fill any fields newer than the save with defaults, then sanity-check references.
   const state: GameState = { ...createState(), ...file.state };
   for (const m of state.machines) {
+    m.name ??= null;
     if (!MACHINES[m.type]) throw new Error(`Save references unknown machine type "${m.type}".`);
     if (m.recipe && !RECIPES[m.recipe]) m.recipe = null;
   }

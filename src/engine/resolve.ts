@@ -3,7 +3,7 @@
 
 import { BLUEPRINTS, type Blueprint } from './blueprints.ts';
 import { ITEM_LIST, MACHINE_LIST, RECIPES, type ItemDef, type MachineDef, type RecipeDef } from './catalog.ts';
-import type { GameState, Machine } from './state.ts';
+import type { GameState, Line, Machine } from './state.ts';
 import { contentBounds, displayName, type Rect } from './world.ts';
 
 const FILLER = new Set(['the', 'a', 'an', 'my', 'our', 'that', 'this', 'of', 'some', 'please', 'new', 'units', 'unit', 'pieces', 'pcs', 'x']);
@@ -119,6 +119,20 @@ export function resolveMachine(state: GameState, ref: string): MachineRef {
   return { error: `Which ${def.name.toLowerCase()}? ${all.map((m) => m.id).join(', ')}.` };
 }
 
+/** A named line or zone: exact name, "kettle line 2" style numbering, or fuzzy name / blueprint match. */
+export function resolveLine(state: GameState, q: string): Line | null {
+  const n = norm(q).replace(/^(the|a|an|my|our)\s+/, '');
+  if (!n) return null;
+  const exact = state.lines.find((l) => norm(l.name) === n || l.id === n);
+  if (exact) return exact;
+  const numbered = n.match(/^(.*?)\s+(\d+)$/);
+  const base = numbered ? numbered[1] : n;
+  const k = numbered ? Number(numbered[2]) : 1;
+  const bp = resolveBlueprint(base);
+  const matches = state.lines.filter((l) => score(base, l.name) >= 54 || (bp !== null && l.blueprint === bp.id));
+  return matches[k - 1] ?? (numbered ? null : matches[0] ?? null);
+}
+
 /** Finds an area to point the camera at: a line, a machine, a machine type, or a product's line. */
 export function resolveFocus(state: GameState, q: string): { rect: Rect; label: string } | null {
   const n = norm(q).replace(/^(the|a|an|my|our)\s+/, '');
@@ -126,36 +140,24 @@ export function resolveFocus(state: GameState, q: string): { rect: Rect; label: 
     const r = contentBounds(state);
     return r ? { rect: r, label: 'the whole factory' } : null;
   }
-  const byLine = (lineId: string) => state.machines.filter((m) => m.line === lineId);
-  // An exact machine-type alias ("smt line") wins over production lines.
-  const typeExact = MACHINE_LIST.find((d) => d.aliases.some((a) => norm(a) === n) || norm(d.name) === n);
-  const lineMatch = n.match(/^(.*?)\s*(?:production\s+)?line\s*(\d+)?$/);
-  if (!typeExact && lineMatch) {
-    const bp = resolveBlueprint(lineMatch[1] || n);
-    if (bp) {
-      const lines = state.lines.filter((l) => l.blueprint === bp.id);
-      const line = lineMatch[2] ? lines[Number(lineMatch[2]) - 1] : lines[0];
-      const r = line && contentBounds(state, byLine(line.id));
-      if (line && r) return { rect: r, label: line.name };
-    }
-  }
+  const lineRect = (line: Line | null) => {
+    const r = line && contentBounds(state, state.machines.filter((m) => m.line === line.id));
+    return line && r ? { rect: r, label: line.name } : null;
+  };
+  const exactLine = state.lines.find((l) => norm(l.name) === n);
+  if (exactLine) return lineRect(exactLine);
   const ref = resolveMachine(state, n);
   if ('machine' in ref) return { rect: contentBounds(state, [ref.machine])!, label: displayName(ref.machine) };
+  // An exact machine-type alias ("smt line") wins over fuzzy line names.
+  const typeExact = MACHINE_LIST.find((d) => d.aliases.some((a) => norm(a) === n) || norm(d.name) === n);
+  if (!typeExact) {
+    const hit = lineRect(resolveLine(state, n));
+    if (hit) return hit;
+  }
   const def = typeExact ?? resolveMachineType(n);
   if (def) {
     const first = state.machines.find((m) => m.type === def.id);
     if (first) return { rect: contentBounds(state, [first])!, label: displayName(first) };
-  }
-  const line = state.lines.find((l) => norm(l.name) === n);
-  if (line) {
-    const r = contentBounds(state, byLine(line.id));
-    if (r) return { rect: r, label: line.name };
-  }
-  const bp = resolveBlueprint(n);
-  if (bp) {
-    const l = state.lines.find((x) => x.blueprint === bp.id);
-    const r = l && contentBounds(state, byLine(l.id));
-    if (l && r) return { rect: r, label: l.name };
   }
   return null;
 }

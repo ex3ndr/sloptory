@@ -47,7 +47,8 @@ export function clean(text: string): string {
   return s.replace(/\s+(please|pls|now|for me)$/, '').trim();
 }
 
-type Rule = (s: string, state?: GameState) => Command | Command[] | null;
+/** s is the cleaned, lowercased text; raw keeps the player's original casing. */
+type Rule = (s: string, state: GameState | undefined, raw: string) => Command | Command[] | null;
 
 const query = (what: QueryKind, target?: string): Command => ({ op: 'query', what, target });
 
@@ -221,6 +222,16 @@ const RULES: Rule[] = [
       s.match(/^how (?:do i|to|do you|do we) (?:make|build|produce) (?:a |an |the )?(.+)$/);
     return m ? query('recipes', m[1]) : null;
   },
+  (s) => {
+    const m = s.match(/^(?:diagnose|diagnosis|troubleshoot|what'?s wrong|whats wrong|any problems|problems|issues|check (?:the )?(?:factory|layout|everything|lines?))(?:\s+(?:with|on|in|for|of)?\s*(?:the\s+)?(.+))?$/);
+    return m ? { op: 'diagnose', target: m[1] } : null;
+  },
+  (s, _state, raw) => {
+    const m = s.match(/^(?:rename|call)\s+(.+?)\s+(?:to|as)\s+["']?(.+?)["']?$/);
+    if (!m) return null;
+    const original = raw.match(/\b(?:rename|call)\s+.+?\s+(?:to|as)\s+["'“]?(.+?)["'”]?[.!?]*\s*$/i);
+    return { op: 'rename', target: m[1], name: original ? original[1] : m[2] };
+  },
   (s, state) => {
     const m = s.match(
       /^(?:info|inspect|details|detail|describe|examine|check|what is|what's|whats|how is|how's|tell me about|about|status of|look into)\s+(?:on\s+)?(?:the\s+)?(.+?)(?:\s+doing)?$/,
@@ -320,7 +331,7 @@ export function parseOne(segment: string, state?: GameState): Command[] | null {
   const s = clean(segment);
   if (!s) return [];
   for (const rule of RULES) {
-    const r = rule(s, state);
+    const r = rule(s, state, segment.trim());
     if (r) return Array.isArray(r) ? r : [r];
   }
   return null;

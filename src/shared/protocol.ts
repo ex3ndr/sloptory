@@ -28,6 +28,8 @@ export interface CatalogView {
 
 export interface MachineView {
   id: string;
+  /** Custom name, if one was given. */
+  name: string | null;
   type: string;
   x: number;
   y: number;
@@ -72,7 +74,8 @@ export interface Snapshot {
   perMinute: { revenue: number; shipped: number };
 }
 
-export type LogKind = 'player' | 'agent' | 'system' | 'error';
+/** tool: live progress while an agent works. */
+export type LogKind = 'player' | 'agent' | 'system' | 'error' | 'tool';
 
 export interface LogEntry {
   id: number;
@@ -90,4 +93,8 @@ export type ServerMessage =
   | { t: 'camera'; camera: Camera }
   | { t: 'busy'; busy: boolean };
 
-export type ClientMessage = { t: 'cmd'; text: string } | { t: 'viewport'; w: number; h: number };
+export type ClientMessage =
+  | { t: 'cmd'; text: string }
+  | { t: 'viewport'; w: number; h: number }
+  /** The client moved its own camera (mouse/keyboard); the server keeps it for text commands. */
+  | { t: 'camera'; camera: Camera };

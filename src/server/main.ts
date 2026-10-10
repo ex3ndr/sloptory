@@ -12,6 +12,7 @@ import { createAgent } from '../agent/llm.ts';
 import { TICK_SECONDS } from '../engine/state.ts';
 import type { ClientView } from '../game/api.ts';
 import { Game, defaultCamera } from '../game/game.ts';
+import { clampCamera } from '../shared/camera.ts';
 import { SNAPSHOT_EVERY_TICKS, type ClientMessage, type LogEntry, type ServerMessage } from '../shared/protocol.ts';
 
 const ROOT = resolve(fileURLToPath(new URL('../..', import.meta.url)));
@@ -63,7 +64,7 @@ game.setListeners(
   },
   (entry: LogEntry) => {
     broadcast({ t: 'log', entries: [entry] });
-    const who = entry.kind === 'agent' ? (entry.via ?? 'agent') : entry.kind;
+    const who = entry.kind === 'agent' || entry.kind === 'error' ? `${entry.kind} (${entry.via ?? 'engine'})` : entry.kind;
     console.log(`[T+${Math.floor(entry.time)}s] ${who}: ${entry.text.replace(/\n/g, '\n    ')}`);
   },
 );
@@ -79,12 +80,21 @@ function submit(text: string, view: ClientView, onCamera?: () => void): Promise<
   const trimmed = text.trim().slice(0, 2000);
   if (!trimmed) return Promise.resolve('');
   game.addLog('player', trimmed);
+  const ctx = { game, view, progress: (line: string) => game.addLog('tool', line, agent.name) };
+  // Camera, speed, help and save answer at once, even while a slow request is running.
+  const before0 = JSON.stringify(view.camera);
+  const quick = agent.quick?.(trimmed, ctx);
+  if (quick) {
+    game.addLog(quick.ok ? 'agent' : 'error', quick.text, quick.via);
+    if (JSON.stringify(view.camera) !== before0) onCamera?.();
+    return Promise.resolve(quick.text);
+  }
   let reply = '';
   queue = queue.then(async () => {
     if (busy++ === 0) broadcast({ t: 'busy', busy: true });
     const before = JSON.stringify(view.camera);
     try {
-      const r = await agent.handle(trimmed, { game, view });
+      const r = await agent.handle(trimmed, ctx);
       reply = r.text;
       game.addLog(r.ok ? 'agent' : 'error', r.text, r.via);
     } catch (e) {
@@ -194,6 +204,10 @@ wss.on('connection', (ws) => {
         client.view.camera = defaultCamera(game.state, client.view.viewport);
         send(ws, { t: 'camera', camera: client.view.camera });
       }
+    } else if (msg.t === 'camera' && msg.camera && [msg.camera.x, msg.camera.y, msg.camera.zoom].every(Number.isFinite)) {
+      // The player moved their own view with mouse or keys; text commands continue from here.
+      client.cameraTouched = true;
+      client.view.camera = clampCamera(msg.camera, { w: game.state.width, h: game.state.height });
     } else if (msg.t === 'cmd' && typeof msg.text === 'string') {
       void submit(msg.text, client.view, () => {
         client.cameraTouched = true;

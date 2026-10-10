@@ -34,6 +34,7 @@ export function machineIndex(state: GameState): Map<string, Machine> {
 }
 
 export function displayName(m: Machine): string {
+  if (m.name) return m.name;
   const n = m.id.slice(m.id.lastIndexOf('-') + 1);
   return `${defOf(m).name} ${n}`;
 }
